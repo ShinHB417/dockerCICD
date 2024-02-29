@@ -37,25 +37,9 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
           restore-keys: ${{ runner.os }}-gradle-
 
-      # 프로젝트 메타정보 추출해서 Docker image에 태그 생성
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{secrets.DOCKER_USERNAME}}/docker-cicd
-          # 가장 최신 image 에 latest tag 달기
-          flavor: |
-            latest=true
-          # Git short commit, use git version tag
-          tags: |
-            type=semver,pattern={{version}}
-
       - name: gradle 빌드
         run: ./gradlew clean build -x test
         shell: bash
-
-      - name: 도커 빌더 생성 및 부팅
-        uses: docker/setup-buildx-action@v2
 
       - name: 도커 허브에 로그인
         uses: docker/login-action@v2
@@ -64,11 +48,11 @@ jobs:
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: 도커 이미지 빌드 및 푸시
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }} /docker-cicd:latest
+        run: |
+          docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_PASSWORD }}
+          docker build -t app .
+          docker tag app ${{ secrets.DOCKERHUB_USERNAME }}/docker-cicd:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/docker-cicd:latest
 
       # EC2 서버에 배포
       - name: EC2서버에 배포
@@ -82,6 +66,6 @@ jobs:
           # 주의 : 실행중인 컨테이너 전부 종료 EC2내 다른컨테이너도 띄워져 있다면 전부 죽이면 안됨
           script: |
             sudo docker stop $(sudo docker ps -a -q) 
-            sudo docker pull ${{secrets.DOCKER_USERNAME}}/docker-cicd
-            sudo docker run -d -p 80:8080 ${{secrets.DOCKER_USERNAME}}/docker-cicd
+            sudo docker pull ${{secrets.DOCKERHUB_USERNAME}}/docker-cicd
+            sudo docker run -d -p 80:8080 ${{secrets.DOCKERHUB_USERNAME}}/docker-cicd
             sudo docker image prune -f
