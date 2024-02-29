@@ -51,8 +51,8 @@ jobs:
         run: |
           docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_PASSWORD }}
           docker build -t app .
-          docker tag app heebum417/docker-cicd:latest
-          docker push heebum417/docker-cicd:latest
+          docker tag app ${{ secrets.DOCKERHUB_USERNAME }}/docker-cicd:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/docker-cicd:latest
 
       # EC2 서버에 배포
       - name: EC2서버에 배포
