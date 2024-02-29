@@ -50,7 +50,7 @@ jobs:
       - name: 도커 이미지 빌드 및 푸시
         run: |
           docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_PASSWORD }}
-          docker build -t app .
+          docker build -t app ./Dockerfile-prod
           docker tag app ${{ secrets.DOCKERHUB_USERNAME }}/docker-cicd:latest
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/docker-cicd:latest
 
