@@ -1,67 +1,71 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-# This workflow will build a Java project with Gradle and cache/restore any dependencies to improve the workflow execution time
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-java-with-gradle
-
-name: Java CI with Gradle
+name: Backend Prod Server CI/CD
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "main" , "dev" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "dev" ]
+
+permissions:
+  contents: read
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+      - name: workflow_dispatch에서 지정한 branch로 checkout
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.SUBMODULE_TOKEN }}
+          submodules: true
 
-    # Configure Gradle for optimal use in GiHub Actions, including caching of downloaded dependencies.
-    # See: https://github.com/gradle/actions/blob/main/setup-gradle/README.md
-    - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@417ae3ccd767c252f5661f1ace9f835f9654f2b5 # v3.1.0
+      - name: JDK 17로 설정
+        uses: actions/setup-java@v3
+        with:
+          java-version: "17"
+          distribution: "temurin"
 
-    - name: Build with Gradle Wrapper
-      run: ./gradlew build
+      - name: Gradle에 실행 권한 부여
+        run: chmod +x gradlew
+        shell: bash
 
-    # NOTE: The Gradle Wrapper is the default and recommended way to run Gradle (https://docs.gradle.org/current/userguide/gradle_wrapper.html).
-    # If your project does not have the Gradle Wrapper configured, you can use the following configuration to run Gradle with a specified version.
-    #
-    # - name: Setup Gradle
-    #   uses: gradle/actions/setup-gradle@417ae3ccd767c252f5661f1ace9f835f9654f2b5 # v3.1.0
-    #   with:
-    #     gradle-version: '8.5'
-    #
-    # - name: Build with Gradle 8.5
-    #   run: gradle build
+      - name: Actions/Caches에 Gradle 라이브러리 캐싱
+        id: cache-gradle
+        uses: actions/cache@v3
+        with:
+          path: ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
+          restore-keys: ${{ runner.os }}-gradle-
 
-  dependency-submission:
+      - name: gradle 빌드
+        run: ./gradlew clean build -x test
+        shell: bash
 
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+      - name: 도커 허브에 로그인
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+      - name: 도커 이미지 빌드 및 푸시
+        run: |
+          docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_PASSWORD }}
+          docker build -t app .
+          docker tag app ${{ secrets.DOCKERHUB_USERNAME }}/docker-cicd:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/docker-cicd:latest
 
-    # Generates and submits a dependency graph, enabling Dependabot Alerts for all project dependencies.
-    # See: https://github.com/gradle/actions/blob/main/dependency-submission/README.md
-    - name: Generate and submit dependency graph
-      uses: gradle/actions/dependency-submission@417ae3ccd767c252f5661f1ace9f835f9654f2b5 # v3.1.0
+      # EC2 서버에 배포
+      - name: EC2서버에 배포
+        uses: appleboy/ssh-action@master
+        id: deploy-prod
+        with:
+          host: ${{ secrets.HOST_PROD}} # EC2 퍼블릭 IPv4 DNS
+          username: ${{secrets.USERNAME}} # EC2 host name (e.g. ubuntu)
+          key: ${{ secrets.SSH_PEM_KEY }} # EC2 ssh 접속 할 때 쓰는 .pem 파일의 내용 그대로 복붙
+          envs: GITHUB_SHA
+          # 주의 : 실행중인 컨테이너 전부 종료 EC2내 다른컨테이너도 띄워져 있다면 전부 죽이면 안됨
+          script: |
+            sudo docker stop $(sudo docker ps -a -q) 
+            sudo docker pull ${{secrets.DOCKERHUB_USERNAME}}/docker-cicd:latest
+            sudo docker run -d -p 8080:8080 ${{secrets.DOCKERHUB_USERNAME}}/docker-cicd:latest
+            sudo docker image prune -f
