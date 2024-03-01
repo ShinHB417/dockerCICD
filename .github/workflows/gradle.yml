@@ -67,5 +67,5 @@ jobs:
           script: |
             sudo docker stop $(sudo docker ps -a -q) 
             sudo docker pull ${{secrets.DOCKERHUB_USERNAME}}/docker-cicd:latest
-            sudo docker run -d -p 8080:3333 ${{secrets.DOCKERHUB_USERNAME}}/docker-cicd:latest
+            sudo docker run -d -p 8080:8080 ${{secrets.DOCKERHUB_USERNAME}}/docker-cicd:latest
             sudo docker image prune -f
