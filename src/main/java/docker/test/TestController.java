@@ -27,6 +27,7 @@ public class TestController {
         responseData.put("env", env);
         responseData.put("serverPort", serverPort);
         responseData.put("serverAddress", serverAddress);
+        responseData.put("name" , "희범");
         return ResponseEntity.ok(responseData);
     }
     @GetMapping("/env")
