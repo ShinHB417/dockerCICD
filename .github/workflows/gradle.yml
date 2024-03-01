@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: workflow_dispatch에서 지정한 branch로 checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v3 #깃허브액션의 템플
         with:
           token: ${{ secrets.SUBMODULE_TOKEN }}
           submodules: true
@@ -47,25 +47,75 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-      - name: 도커 이미지 빌드 및 푸시
+      - name: 도커 이미지 빌드
         run: |
           docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_PASSWORD }}
-          docker build -t app -f ./Dockerfile-prod .
-          docker tag app ${{ secrets.DOCKERHUB_USERNAME }}/docker-cicd:latest
-          docker push ${{ secrets.DOCKERHUB_USERNAME }}/docker-cicd:latest
+          docker build -t app -f ${{ secrets.DOCKERHUB_USERNAME }}/live_server .  
+      - name: 도커 이미지 PUSH
+        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/live_server:latest
 
-      # EC2 서버에 배포
-      - name: EC2서버에 배포
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set target IP
+        run: |
+          STATUS=$(curl -o /dev/null -w "%{http_code}" "http://${{ secrets.LIVE_SERVER_IP }}/env")
+          echo $STATUS
+          if [ $STATUS = 200 ]; then
+            CURRENT_UPSTREAM=$(curl -s "http://${{ secrets.LIVE_SERVER_IP }}/env")
+          else
+            CURRENT_UPSTREAM=green
+          fi
+          echo CURRENT_UPSTREAM=$CURRENT_UPSTREAM >> $GITHUB_ENV
+          if [ $CURRENT_UPSTREAM = blue ]; then
+            echo "CURRENT_PORT=8080" >> $GITHUB_ENV
+            echo "STOPPED_PORT=8081" >> $GITHUB_ENV
+            echo "TARGET_UPSTREAM=green" >> $GITHUB_ENV
+          elif [ $CURRENT_UPSTREAM = green ]; then
+            echo "CURRENT_PORT=8081" >> $GITHUB_ENV
+            echo "STOPPED_PORT=8080" >> $GITHUB_ENV
+            echo "TARGET_UPSTREAM=blue" >> $GITHUB_ENV
+          else
+            echo "error"
+            exit 1
+          fi
+          
+      - name: Docker compose
         uses: appleboy/ssh-action@master
-        id: deploy-prod
         with:
-          host: ${{ secrets.HOST_PROD}} # EC2 퍼블릭 IPv4 DNS
-          username: ${{secrets.USERNAME}} # EC2 host name (e.g. ubuntu)
-          key: ${{ secrets.SSH_PEM_KEY }} # EC2 ssh 접속 할 때 쓰는 .pem 파일의 내용 그대로 복붙
-          envs: GITHUB_SHA
-          # 주의 : 실행중인 컨테이너 전부 종료 EC2내 다른컨테이너도 띄워져 있다면 전부 죽이면 안됨
+          username: ubuntu
+          host: ${{ secrets.LIVE_SERVER_IP }}
+          key: ${{ secrets.SSH_PEM_KEY }}
+          script_stop: true
           script: |
-            sudo docker stop $(sudo docker ps -a -q) 
-            sudo docker pull ${{secrets.DOCKERHUB_USERNAME}}/docker-cicd:latest
-            sudo docker run -d -p 8080:8080 ${{secrets.DOCKERHUB_USERNAME}}/docker-cicd:latest
-            sudo docker image prune -f
+            sudo docker pull ${{ secrets.DOCKERHUB_USERNAME }}/live_server:latest
+            sudo docker-compose -f docker-compose-${{env.TARGET_UPSTREAM}}.yml up -d
+      
+      - name: Check deploy server URL
+        uses: jtalk/url-health-check-action@v3
+        with:
+          url: http://${{ secrets.LIVE_SERVER_IP }}:${{env.STOPPED_PORT}}/env
+          max-attempts: 5
+          retry-delay: 10s
+
+      - name: Change nginx upstream
+        uses: appleboy/ssh-action@master
+        with:
+          username: ubuntu
+          host: ${{ secrets.LIVE_SERVER_IP }}
+          key: ${{ secrets.SSH_PEM_KEY }}
+          script_stop: true
+          script: |
+            sudo docker exec -i nginxserver bash -c 'echo "set \$service_url ${{ env.TARGET_UPSTREAM }};" > /etc/nginx/conf.d/service-env.inc && nginx -s reload' 
+
+      - name: Stop current server
+        uses: appleboy/ssh-action@master
+        with:
+          username: ubuntu
+          host: ${{ secrets.LIVE_SERVER_IP }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            sudo docker stop ${{env.CURRENT_UPSTREAM}}
+            sudo docker rm ${{env.CURRENT_UPSTREAM}}
